@@ -41,7 +41,12 @@ jobs:
         run: |
           echo "REPO_DIR=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
           echo "FOX_DIR=/home/runner/fox_${FOX_BRANCH}" >> "$GITHUB_ENV"
-          echo "OUT_DIR=${GITHUB_WORKSPACE}/out" >> "$GITHUB_ENV"
+          # PENTING: jangan pake nama "OUT_DIR" - itu env var reserved punya
+          # build system Android/Soong sendiri. Kalo di-export di sini, dia
+          # bocor ke step Build dan bikin AOSP mindahin OUT_DIR ke folder ini,
+          # yang bikin build system ngaktifin sandbox read-only di luar situ
+          # (termasuk $HOME/.cache/ccache -> "Read-only file system").
+          echo "RESULT_DIR=${GITHUB_WORKSPACE}/out" >> "$GITHUB_ENV"
 
       - name: Free disk space
         run: |
@@ -96,9 +101,13 @@ jobs:
           cd sync
 
           set +o pipefail
-          stdbuf -oL -eL ./orangefox_sync.sh --branch "$FOX_BRANCH" --path "$FOX_DIR" 2>&1 \
+          # 'repo sync' cuma print progress % kalau stdout-nya keitung TTY (isatty).
+          # Di GH Actions stdout itu dipipe, bukan TTY -> progress bar mati total.
+          # 'script' bikin pseudo-TTY palsu biar repo ngira dia jalan interaktif.
+          script -qfec "./orangefox_sync.sh --branch '$FOX_BRANCH' --path '$FOX_DIR'" /dev/null 2>&1 \
             | tee "$REPO_DIR/sync_full.log" \
             | stdbuf -oL tr '\r' '\n' \
+            | stdbuf -oL sed -u -r 's/\x1b\[[0-9;]*[a-zA-Z]//g' \
             | stdbuf -oL grep --line-buffered -oE '[0-9]{1,3}% \([0-9]+/[0-9]+\)' \
             | awk '!seen[$0]++ { print "== sync: " $0 }'
           SYNC_RC=${PIPESTATUS[0]}
@@ -179,10 +188,10 @@ jobs:
       - name: Collect build results
         run: |
           PRODUCT_OUT="$FOX_DIR/out/target/product/$DEVICE"
-          mkdir -p "$OUT_DIR"
-          cp -v "$PRODUCT_OUT/recovery.img" "$OUT_DIR/" 2>/dev/null || true
-          cp -v "$PRODUCT_OUT"/OrangeFox* "$OUT_DIR/" 2>/dev/null || true
-          cp -v "$PRODUCT_OUT"/*.tar "$OUT_DIR/" 2>/dev/null || true
+          mkdir -p "$RESULT_DIR"
+          cp -v "$PRODUCT_OUT/recovery.img" "$RESULT_DIR/" 2>/dev/null || true
+          cp -v "$PRODUCT_OUT"/OrangeFox* "$RESULT_DIR/" 2>/dev/null || true
+          cp -v "$PRODUCT_OUT"/*.tar "$RESULT_DIR/" 2>/dev/null || true
 
           LIMIT=$(grep -oP 'BOARD_RECOVERYIMAGE_PARTITION_SIZE\s*:=\s*\K[0-9]+' "$REPO_DIR/BoardConfig.mk" | head -1)
           if [ -f "$PRODUCT_OUT/recovery.img" ] && [ -n "$LIMIT" ]; then
@@ -192,8 +201,8 @@ jobs:
               echo "!! MELEBIHI partisi. Kurangi isi ramdisk (flag FOX_* diet di vendorsetup.sh)"
             fi
           fi
-          echo "== SELESAI. Hasil ada di: $OUT_DIR"
-          ls -la "$OUT_DIR"
+          echo "== SELESAI. Hasil ada di: $RESULT_DIR"
+          ls -la "$RESULT_DIR"
 
       - name: Upload build artifacts
         if: success()
@@ -202,3 +211,4 @@ jobs:
           name: orangefox-a02
           path: out/*
           if-no-files-found: error
+          
