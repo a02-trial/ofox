@@ -85,7 +85,7 @@ jobs:
       - name: Setup ccache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ env.FOX_DIR }}/out/.ccache
           key: ccache-ofox-${{ github.event.inputs.fox_branch }}-${{ github.sha }}
           restore-keys: |
             ccache-ofox-${{ github.event.inputs.fox_branch }}-
@@ -160,13 +160,18 @@ jobs:
       - name: Build (lunch + mka adbd recoveryimage)
         run: |
           cd "$FOX_DIR"
+          [ "${{ github.event.inputs.clean_build }}" = "true" ] && rm -rf "$FOX_DIR/out"
+
           if command -v ccache >/dev/null 2>&1; then
             export USE_CCACHE=1
             export CCACHE_EXEC="$(command -v ccache)"
-            mkdir -p ~/.cache/ccache
+            # ccache HARUS nulis di dalem $FOX_DIR/out - build ini nge-sandbox
+            # compile action, cuma path di dalem OUT_DIR yang writable.
+            # $HOME/.cache/ccache (default) ada di luar situ -> "Read-only file system".
+            export CCACHE_DIR="$FOX_DIR/out/.ccache"
+            mkdir -p "$CCACHE_DIR"
             ccache -M 5G || true
           fi
-          [ "${{ github.event.inputs.clean_build }}" = "true" ] && rm -rf "$FOX_DIR/out"
 
           set +e
           source build/envsetup.sh
@@ -211,4 +216,3 @@ jobs:
           name: orangefox-a02
           path: out/*
           if-no-files-found: error
-          
